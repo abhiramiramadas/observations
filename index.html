@@ -32,7 +32,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:'Roboto Mono'
 @keyframes fade{from{opacity:0}}
 .floor{position:absolute;left:0;right:0;bottom:0;height:24%;background:var(--floor);border-top:3px solid var(--ink)}
 .tv{position:absolute;left:50%;top:44%;width:min(760px,92vw);aspect-ratio:1.42;transform:translate(-50%,-50%) rotate(1.2deg);background:var(--green);border:5px solid var(--dark);border-radius:6px;filter:url(#rough)}
-.screen{position:absolute;left:5%;top:14%;width:70%;height:64%;background:radial-gradient(ellipse at 40% 30%,#1f4a14,#0b2208);border:4px solid #1b2a10;border-radius:6px;padding:4% 5%;color:#b7dca0;overflow:hidden;transform:skewY(1deg)}
+.screen{position:absolute;left:5%;top:14%;width:70%;height:64%;background:radial-gradient(ellipse at 40% 30%,#1f4a14,#0b2208);border:4px solid #1b2a10;border-radius:6px;padding:4% 5%;color:#b7dca0;overflow-x:hidden;overflow-y:auto;transform:skewY(1deg)}
 .screen:after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(#0000 0 3px,#0003 3px 4px);pointer-events:none}
 .st{font:400 clamp(12px,1.9vw,17px) 'VT323',monospace;letter-spacing:.12em;color:#9cc487}
 .sh{font:400 clamp(26px,5vw,46px) 'VT323',monospace;line-height:1;margin:.5em 0 .4em;text-transform:uppercase}
@@ -224,15 +224,20 @@ function buildEd(openIdx){
 let FB=null;
 async function initFirebase(){
  if(FB||!firebaseEnabled())return FB;
- const [{initializeApp},{getFirestore,doc,getDoc,setDoc,onSnapshot},{getAuth,GoogleAuthProvider,signInWithPopup,onAuthStateChanged,signOut}]=await Promise.all([
+ const [{initializeApp},{getFirestore,doc,getDoc,setDoc,onSnapshot},{getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,onAuthStateChanged,signOut}]=await Promise.all([
   import('https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js'),
   import('https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js'),
   import('https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js')
  ]);
  const app=initializeApp(FIREBASE_CONFIG);
  const db=getFirestore(app),auth=getAuth(app),ref=doc(db,...FIREBASE_DOC_PATH),provider=new GoogleAuthProvider();
- FB={auth,ref,getDoc,setDoc,onSnapshot,signInWithPopup,provider,signOut};
+ FB={auth,ref,getDoc,setDoc,onSnapshot,signInWithPopup,signInWithRedirect,getRedirectResult,provider,signOut};
  onAuthStateChanged(auth,u=>{$('ed-login').textContent=u?'Sign out':'Sign in'});
+ const redirect=await getRedirectResult(auth);
+ if(redirect?.user&&localStorage.getItem('observations.publish.pending')==='1'){
+  localStorage.removeItem('observations.publish.pending');
+  setTimeout(publishOnline,0);
+ }
  return FB;
 }
 async function loadPublished(){
@@ -246,9 +251,17 @@ async function signInEditor(){
  if(!firebaseEnabled()){msg('Add Firebase config in the file first.');return null}
  const fb=await initFirebase();
  if(fb.auth.currentUser){await fb.signOut(fb.auth);msg('Signed out.');return null}
- const res=await fb.signInWithPopup(fb.auth,fb.provider);
- msg(res.user.email===FIREBASE_ADMIN_EMAIL?'Signed in as owner.':'Signed in, but this email is not allowed to publish.');
- return res.user;
+ try{
+  const res=await fb.signInWithPopup(fb.auth,fb.provider);
+  msg(res.user.email===FIREBASE_ADMIN_EMAIL?'Signed in as owner.':'Signed in, but this email is not allowed to publish.');
+  return res.user;
+ }catch(e){
+  if(e.code!=='auth/popup-blocked')throw e;
+  localStorage.setItem('observations.publish.pending','1');
+  msg('Popup blocked. Continuing sign-in in this tab...');
+  await fb.signInWithRedirect(fb.auth,fb.provider);
+  return null;
+ }
 }
 async function publishOnline(){
  if(!firebaseEnabled()){msg('Add Firebase config first, then this button will publish online.');return}
